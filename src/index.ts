@@ -497,13 +497,17 @@ export class PharmaMCP extends McpAgent<Env> {
 }
 
 export default {
-  fetch(request: Request, env: Env, ctx: ExecutionContext) {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
-    if (url.pathname === "/mcp" || url.pathname === "/mcp/") {
-      const id = env.MCP_OBJECT.idFromName("pharma-mcp");
-      const stub = env.MCP_OBJECT.get(id);
-      return stub.fetch(request);
+    // SSE transport (legacy clients)
+    if (url.pathname === "/sse" || url.pathname.startsWith("/sse/")) {
+      return PharmaMCP.serveSSE("/sse").fetch(request, env, ctx);
+    }
+
+    // Streamable HTTP transport (new spec)
+    if (url.pathname === "/mcp") {
+      return PharmaMCP.serve("/mcp").fetch(request, env, ctx);
     }
 
     return new Response(
