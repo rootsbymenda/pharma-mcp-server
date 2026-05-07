@@ -2,6 +2,11 @@ import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
+// Escape LIKE special characters in user input to prevent wildcard injection
+function escapeLike(s: string): string {
+  return s.replace(/[%_\\]/g, '\\$&');
+}
+
 const RATE_LIMIT_PER_MINUTE = 60;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 
@@ -29,7 +34,112 @@ function rateLimitResponse(): Response {
 interface Env {
   DB: D1Database;
   MCP_OBJECT: DurableObjectNamespace;
+  // Auth env — optional. When configured, validates Bearer tokens for usage tracking
+  // and per-user rate limiting. Without these, all callers are treated as anonymous free tier.
+  MCP_KEY_SECRET?: string;
+  SUPABASE_URL?: string;
+  SUPABASE_SERVICE_ROLE_KEY?: string;
 }
+
+// --- Auth: HMAC-validated MCP key + Supabase plan lookup ---
+// MCP keys are issued by rootsbybenda-site/functions/api/mcp-key.js using the
+// SAME MCP_KEY_SECRET. Format: mcp_<base64url(user_id)>_<sha256_hmac[:32]>.
+// On these public-data servers, auth is for TRACKING and REVOCATION, not tier gating.
+// Unauthenticated callers get full access at free tier.
+
+interface AuthProps extends Record<string, unknown> {
+  tier: "paid" | "free";
+  user_id: string | null;
+  plan: string;
+}
+
+function base64urlDecodeToString(b64url: string): string {
+  const b64 = b64url.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = b64 + "===".slice((b64.length + 3) % 4);
+  return atob(padded);
+}
+
+async function hmacSha256Hex(message: string, secret: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
+  return Array.from(new Uint8Array(sig))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+async function resolveAuth(request: Request, env: Env): Promise<AuthProps> {
+  const authHeader = request.headers.get("Authorization") || "";
+  const match = authHeader.match(/^Bearer\s+(mcp_[A-Za-z0-9_-]+_[a-f0-9]{32})\s*$/i);
+  if (!match) return { tier: "free", user_id: null, plan: "anonymous" };
+
+  const key = match[1];
+  const parts = key.split("_");
+  if (parts.length !== 3 || parts[0] !== "mcp") {
+    return { tier: "free", user_id: null, plan: "anonymous" };
+  }
+  const userIdB64 = parts[1];
+  const providedHmac = parts[2].toLowerCase();
+
+  if (!env.MCP_KEY_SECRET) {
+    console.error("resolveAuth: MCP_KEY_SECRET not configured");
+    return { tier: "free", user_id: null, plan: "anonymous" };
+  }
+
+  let userId: string;
+  try {
+    userId = base64urlDecodeToString(userIdB64);
+  } catch {
+    return { tier: "free", user_id: null, plan: "anonymous" };
+  }
+  if (!userId) return { tier: "free", user_id: null, plan: "anonymous" };
+
+  const computed = (await hmacSha256Hex(userId, env.MCP_KEY_SECRET)).slice(0, 32);
+  if (!constantTimeEqual(computed, providedHmac)) {
+    return { tier: "free", user_id: null, plan: "anonymous" };
+  }
+
+  // Valid HMAC — user is authenticated. Look up plan if Supabase is configured.
+  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) {
+    return { tier: "free", user_id: userId, plan: "authenticated" };
+  }
+
+  let plan = "free";
+  try {
+    const profileRes = await fetch(
+      `${env.SUPABASE_URL}/rest/v1/profiles?id=eq.${userId}&select=plan`,
+      {
+        headers: {
+          Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+          apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+        },
+      }
+    );
+    if (profileRes.ok) {
+      const profiles = (await profileRes.json()) as Array<{ plan?: string }>;
+      if (profiles.length > 0 && profiles[0].plan) {
+        plan = profiles[0].plan;
+      }
+    }
+  } catch (e) {
+    console.error("resolveAuth: profile lookup failed", e);
+  }
+
+  return { tier: "free", user_id: userId, plan };
+}
+// --- End auth ---
 
 export class PharmaMCP extends McpAgent<Env> {
   server = new McpServer({
@@ -51,17 +161,18 @@ export class PharmaMCP extends McpAgent<Env> {
       },
       async ({ query }) => {
         const q = query.trim();
+        const qEsc = escapeLike(q);
         let text = `## Drug Lookup: "${query}"\n\n`;
         let totalResults = 0;
 
         // DrugBank
         const drugbank = await this.env.DB.prepare(
           `SELECT * FROM drugbank_drugs
-           WHERE Drug_Name LIKE ? COLLATE NOCASE
+           WHERE Drug_Name LIKE ? ESCAPE '\\' COLLATE NOCASE
               OR CAS_Number = ?
            LIMIT 10`
         )
-          .bind(`%${q}%`, q)
+          .bind(`%${qEsc}%`, q)
           .all();
 
         if (drugbank.results && drugbank.results.length > 0) {
@@ -81,10 +192,10 @@ export class PharmaMCP extends McpAgent<Env> {
         // WHO Essential Medicines
         const who = await this.env.DB.prepare(
           `SELECT * FROM who_essential_medicines
-           WHERE medicine_name LIKE ? COLLATE NOCASE
+           WHERE medicine_name LIKE ? ESCAPE '\\' COLLATE NOCASE
            LIMIT 10`
         )
-          .bind(`%${q}%`)
+          .bind(`%${qEsc}%`)
           .all();
 
         if (who.results && who.results.length > 0) {
@@ -108,11 +219,11 @@ export class PharmaMCP extends McpAgent<Env> {
         // TGA ARTG Medicines
         const tga = await this.env.DB.prepare(
           `SELECT * FROM tga_artg_medicines
-           WHERE product_name LIKE ? COLLATE NOCASE
-              OR active_ingredient LIKE ? COLLATE NOCASE
+           WHERE product_name LIKE ? ESCAPE '\\' COLLATE NOCASE
+              OR active_ingredient LIKE ? ESCAPE '\\' COLLATE NOCASE
            LIMIT 10`
         )
-          .bind(`%${q}%`, `%${q}%`)
+          .bind(`%${qEsc}%`, `%${qEsc}%`)
           .all();
 
         if (tga.results && tga.results.length > 0) {
@@ -136,11 +247,11 @@ export class PharmaMCP extends McpAgent<Env> {
         // FDA NDI Notifications
         const ndi = await this.env.DB.prepare(
           `SELECT * FROM fda_ndi_notifications
-           WHERE new_dietary_ingredient_name LIKE ? COLLATE NOCASE
+           WHERE new_dietary_ingredient_name LIKE ? ESCAPE '\\' COLLATE NOCASE
               OR cas_number = ?
            LIMIT 10`
         )
-          .bind(`%${q}%`, q)
+          .bind(`%${qEsc}%`, q)
           .all();
 
         if (ndi.results && ndi.results.length > 0) {
@@ -191,18 +302,20 @@ export class PharmaMCP extends McpAgent<Env> {
       },
       async ({ drug, second_drug }) => {
         const d = drug.trim();
+        const dEsc = escapeLike(d);
 
         if (second_drug) {
           const d2 = second_drug.trim();
+          const d2Esc = escapeLike(d2);
 
           const { results } = await this.env.DB.prepare(
             `SELECT * FROM drug_interactions
-             WHERE (drug_1_name LIKE ? COLLATE NOCASE AND drug_2_name LIKE ? COLLATE NOCASE)
-                OR (drug_1_name LIKE ? COLLATE NOCASE AND drug_2_name LIKE ? COLLATE NOCASE)
+             WHERE (drug_1_name LIKE ? ESCAPE '\\' COLLATE NOCASE AND drug_2_name LIKE ? ESCAPE '\\' COLLATE NOCASE)
+                OR (drug_1_name LIKE ? ESCAPE '\\' COLLATE NOCASE AND drug_2_name LIKE ? ESCAPE '\\' COLLATE NOCASE)
              ORDER BY severity DESC
              LIMIT 50`
           )
-            .bind(`%${d}%`, `%${d2}%`, `%${d2}%`, `%${d}%`)
+            .bind(`%${dEsc}%`, `%${d2Esc}%`, `%${d2Esc}%`, `%${dEsc}%`)
             .all();
 
           if (!results || results.length === 0) {
@@ -233,12 +346,12 @@ export class PharmaMCP extends McpAgent<Env> {
         // Single drug — find all interactions
         const { results } = await this.env.DB.prepare(
           `SELECT * FROM drug_interactions
-           WHERE drug_1_name LIKE ? COLLATE NOCASE
-              OR drug_2_name LIKE ? COLLATE NOCASE
+           WHERE drug_1_name LIKE ? ESCAPE '\\' COLLATE NOCASE
+              OR drug_2_name LIKE ? ESCAPE '\\' COLLATE NOCASE
            ORDER BY severity DESC
            LIMIT 50`
         )
-          .bind(`%${d}%`, `%${d}%`)
+          .bind(`%${dEsc}%`, `%${dEsc}%`)
           .all();
 
         if (!results || results.length === 0) {
@@ -294,14 +407,15 @@ export class PharmaMCP extends McpAgent<Env> {
       },
       async ({ query }) => {
         const q = query.trim();
+        const qEsc = escapeLike(q);
 
         const { results } = await this.env.DB.prepare(
           `SELECT * FROM fda_faers_top_drugs
-           WHERE drug_name LIKE ? COLLATE NOCASE
-              OR active_ingredient LIKE ? COLLATE NOCASE
+           WHERE drug_name LIKE ? ESCAPE '\\' COLLATE NOCASE
+              OR active_ingredient LIKE ? ESCAPE '\\' COLLATE NOCASE
            LIMIT 20`
         )
-          .bind(`%${q}%`, `%${q}%`)
+          .bind(`%${qEsc}%`, `%${qEsc}%`)
           .all();
 
         if (!results || results.length === 0) {
@@ -345,18 +459,19 @@ export class PharmaMCP extends McpAgent<Env> {
       },
       async ({ query }) => {
         const q = query.trim();
+        const qEsc = escapeLike(q);
         let text = `## Pharma Search Results: "${query}"\n\n`;
         let totalResults = 0;
 
         // DrugBank
         const drugbank = await this.env.DB.prepare(
           `SELECT * FROM drugbank_drugs
-           WHERE Drug_Name LIKE ? COLLATE NOCASE
-              OR Drug_Groups LIKE ? COLLATE NOCASE
-              OR Targets LIKE ? COLLATE NOCASE
+           WHERE Drug_Name LIKE ? ESCAPE '\\' COLLATE NOCASE
+              OR Drug_Groups LIKE ? ESCAPE '\\' COLLATE NOCASE
+              OR Targets LIKE ? ESCAPE '\\' COLLATE NOCASE
            LIMIT 20`
         )
-          .bind(`%${q}%`, `%${q}%`, `%${q}%`)
+          .bind(`%${qEsc}%`, `%${qEsc}%`, `%${qEsc}%`)
           .all();
 
         if (drugbank.results && drugbank.results.length > 0) {
@@ -373,12 +488,12 @@ export class PharmaMCP extends McpAgent<Env> {
         // WHO Essential Medicines
         const who = await this.env.DB.prepare(
           `SELECT * FROM who_essential_medicines
-           WHERE medicine_name LIKE ? COLLATE NOCASE
-              OR indication LIKE ? COLLATE NOCASE
-              OR eml_section LIKE ? COLLATE NOCASE
+           WHERE medicine_name LIKE ? ESCAPE '\\' COLLATE NOCASE
+              OR indication LIKE ? ESCAPE '\\' COLLATE NOCASE
+              OR eml_section LIKE ? ESCAPE '\\' COLLATE NOCASE
            LIMIT 20`
         )
-          .bind(`%${q}%`, `%${q}%`, `%${q}%`)
+          .bind(`%${qEsc}%`, `%${qEsc}%`, `%${qEsc}%`)
           .all();
 
         if (who.results && who.results.length > 0) {
@@ -395,12 +510,12 @@ export class PharmaMCP extends McpAgent<Env> {
         // TGA ARTG
         const tga = await this.env.DB.prepare(
           `SELECT * FROM tga_artg_medicines
-           WHERE product_name LIKE ? COLLATE NOCASE
-              OR active_ingredient LIKE ? COLLATE NOCASE
-              OR indications LIKE ? COLLATE NOCASE
+           WHERE product_name LIKE ? ESCAPE '\\' COLLATE NOCASE
+              OR active_ingredient LIKE ? ESCAPE '\\' COLLATE NOCASE
+              OR indications LIKE ? ESCAPE '\\' COLLATE NOCASE
            LIMIT 20`
         )
-          .bind(`%${q}%`, `%${q}%`, `%${q}%`)
+          .bind(`%${qEsc}%`, `%${qEsc}%`, `%${qEsc}%`)
           .all();
 
         if (tga.results && tga.results.length > 0) {
@@ -417,12 +532,12 @@ export class PharmaMCP extends McpAgent<Env> {
         // FDA FAERS
         const faers = await this.env.DB.prepare(
           `SELECT * FROM fda_faers_top_drugs
-           WHERE drug_name LIKE ? COLLATE NOCASE
-              OR active_ingredient LIKE ? COLLATE NOCASE
-              OR top_10_adverse_reactions LIKE ? COLLATE NOCASE
+           WHERE drug_name LIKE ? ESCAPE '\\' COLLATE NOCASE
+              OR active_ingredient LIKE ? ESCAPE '\\' COLLATE NOCASE
+              OR top_10_adverse_reactions LIKE ? ESCAPE '\\' COLLATE NOCASE
            LIMIT 20`
         )
-          .bind(`%${q}%`, `%${q}%`, `%${q}%`)
+          .bind(`%${qEsc}%`, `%${qEsc}%`, `%${qEsc}%`)
           .all();
 
         if (faers.results && faers.results.length > 0) {
@@ -439,14 +554,14 @@ export class PharmaMCP extends McpAgent<Env> {
         // Drug Interactions
         const interactions = await this.env.DB.prepare(
           `SELECT * FROM drug_interactions
-           WHERE drug_1_name LIKE ? COLLATE NOCASE
-              OR drug_2_name LIKE ? COLLATE NOCASE
-              OR interaction_mechanism LIKE ? COLLATE NOCASE
-              OR clinical_effect LIKE ? COLLATE NOCASE
+           WHERE drug_1_name LIKE ? ESCAPE '\\' COLLATE NOCASE
+              OR drug_2_name LIKE ? ESCAPE '\\' COLLATE NOCASE
+              OR interaction_mechanism LIKE ? ESCAPE '\\' COLLATE NOCASE
+              OR clinical_effect LIKE ? ESCAPE '\\' COLLATE NOCASE
            ORDER BY severity DESC
            LIMIT 20`
         )
-          .bind(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`)
+          .bind(`%${qEsc}%`, `%${qEsc}%`, `%${qEsc}%`, `%${qEsc}%`)
           .all();
 
         if (interactions.results && interactions.results.length > 0) {
@@ -463,11 +578,11 @@ export class PharmaMCP extends McpAgent<Env> {
         // FDA NDI
         const ndi = await this.env.DB.prepare(
           `SELECT * FROM fda_ndi_notifications
-           WHERE new_dietary_ingredient_name LIKE ? COLLATE NOCASE
-              OR intended_conditions_of_use LIKE ? COLLATE NOCASE
+           WHERE new_dietary_ingredient_name LIKE ? ESCAPE '\\' COLLATE NOCASE
+              OR intended_conditions_of_use LIKE ? ESCAPE '\\' COLLATE NOCASE
            LIMIT 20`
         )
-          .bind(`%${q}%`, `%${q}%`)
+          .bind(`%${qEsc}%`, `%${qEsc}%`)
           .all();
 
         if (ndi.results && ndi.results.length > 0) {
@@ -484,11 +599,11 @@ export class PharmaMCP extends McpAgent<Env> {
         // ChEMBL Bioactivity
         const chembl = await this.env.DB.prepare(
           `SELECT * FROM chembl_bioactivity
-           WHERE molecule_name LIKE ? COLLATE NOCASE
-              OR target_name LIKE ? COLLATE NOCASE
+           WHERE molecule_name LIKE ? ESCAPE '\\' COLLATE NOCASE
+              OR target_name LIKE ? ESCAPE '\\' COLLATE NOCASE
            LIMIT 20`
         )
-          .bind(`%${q}%`, `%${q}%`)
+          .bind(`%${qEsc}%`, `%${qEsc}%`)
           .all();
 
         if (chembl.results && chembl.results.length > 0) {
@@ -524,10 +639,15 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
-    const clientIp = request.headers.get("cf-connecting-ip") || request.headers.get("x-forwarded-for") || "unknown";
+    // Resolve auth early — use user_id for rate limiting when authenticated (better for shared IPs)
+    let auth: AuthProps | null = null;
     const isDataEndpoint = url.pathname === "/mcp" || url.pathname === "/sse" || url.pathname.startsWith("/sse/") || (request.method === "POST" && url.pathname === "/");
-    if (isDataEndpoint && !checkRateLimit(clientIp)) {
-      return rateLimitResponse();
+    if (isDataEndpoint) {
+      auth = await resolveAuth(request, env);
+      const rateLimitKey = auth.user_id || request.headers.get("cf-connecting-ip") || request.headers.get("x-forwarded-for") || "unknown";
+      if (!checkRateLimit(rateLimitKey)) {
+        return rateLimitResponse();
+      }
     }
 
     if (url.pathname === "/.well-known/mcp/server-card.json") {
@@ -541,10 +661,16 @@ export default {
         "documentationUrl": "https://rootsbybenda.com",
         "transport": { "type": "streamable-http", "endpoint": "/mcp" },
         "capabilities": { "tools": { "listChanged": true }, "resources": { "subscribe": false, "listChanged": false } },
-        "authentication": { "required": false, "schemes": ["bearer"] },
-        "rateLimit": { "requestsPerMinute": 60, "enforcement": "per-ip" },
+        "authentication": { "required": false, "schemes": ["bearer"], "note": "Optional API key enables higher rate limits and usage tracking" },
+        "rateLimit": { "requestsPerMinute": 60, "enforcement": "per-ip-or-user" },
         "tools": ["dynamic"]
       }, { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=300" } });
+    }
+
+    // Resolve auth and set on ctx.props for MCP transport endpoints
+    if (url.pathname === "/sse" || url.pathname.startsWith("/sse/") || url.pathname === "/mcp") {
+      if (!auth) auth = await resolveAuth(request, env);
+      (ctx as ExecutionContext & { props?: AuthProps }).props = auth;
     }
 
     // SSE transport (legacy clients)
