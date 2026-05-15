@@ -29,4 +29,4 @@ Full-text search across all 7 pharmaceutical databases — drugs, interactions, 
 | ChEMBL Bioactivity | 7,941 | ChEMBL Database |
 | **Total** | **45,259** | |
 
-## Built by Two Halves — twohalves.ai
+## Built by Roots by Benda — rootsbybenda.com
