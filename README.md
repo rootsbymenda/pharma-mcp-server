@@ -13,9 +13,15 @@ Equivalent data through commercial platforms (Lexicomp, Micromedex, DrugBank Pro
 Look up a drug, medicine, active ingredient, or CAS number across DrugBank, WHO Essential Medicines, Australian TGA ARTG, and FDA NDI notifications. Returns identifiers, targets, schedules, dosage forms, indications, and regulatory records.
 
 ```
-query: "metformin"
-→ DrugBank: DB00331; WHO Essential: Yes (diabetes); TGA ARTG: 47 registered products;
-  Targets: AMP-activated protein kinase; Indications: Type 2 diabetes mellitus
+query: "ibuprofen"
+→ DrugBank: Ibuprofen (DB01050), CAS 15687-27-1, approved/investigational
+  Targets: Prostaglandin G/H synthase 1 & 2, PPAR-gamma, CFTR
+  Drug-Drug Interactions: 100
+  WHO Essential: Yes — ATC M01AE01, analgesic/anti-inflammatory
+  Formulations: IV 5 mg/mL; Oral 200/400/600 mg tablet; Liquid 100-200 mg/5 mL
+  Dosage: 200-400 mg q6-8h; max 1200-2400 mg/day
+  Contraindications: Active GI bleeding; severe renal impairment; third trimester pregnancy
+  TGA ARTG: 10 registered products (BRUFEN 400mg, CALDOLOR IV, NUROFEN PLUS, etc.)
 ```
 
 ### `check_drug_interactions`
