@@ -1,5 +1,5 @@
 description: >-
-  Need to check drug interactions, adverse events, or regulatory records? Roots by Benda checks 23,259 Australian registered medicines, 4,947 DrugBank compounds, 5,000 drug-drug interactions, 2,000 FDA FAERS adverse-event records, 782 WHO essential medicines, 1,330 FDA NDI notifications, and 7,941 ChEMBL bioactivity records. Drug safety across DrugBank, interactions, FAERS adverse events, and WHO essential medicines in one free MCP. Ask your AI: 'check drug interactions for ibuprofen'. Built by one human + Claude. Free. Source-linked.
+  Check drug safety across interactions, FAERS, DrugBank, WHO, TGA, and ChEMBL. Roots by Benda checks 23,259 Australian registered medicines, 4,947 DrugBank compounds, 5,000 drug-drug interactions, 2,000 FDA FAERS adverse-event records, 782 WHO essential medicines, 1,330 FDA NDI notifications, and 7,941 ChEMBL bioactivity records. Drug safety across DrugBank, interactions, FAERS adverse events, and WHO essential medicines in one free MCP. Ask your AI: 'check drug interactions for ibuprofen'. Built by one human + Claude. Free. Source-linked.
 startCommand:
   type: "http"
   configSchema:

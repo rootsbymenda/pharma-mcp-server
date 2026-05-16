@@ -153,7 +153,7 @@ const SOURCE = "Roots by Benda \u2014 rootsbybenda.com";
 const CONTACT = "SBD@effortlessai.ai";
 const SERVER_NAME = "Roots by Benda \u2014 Pharmaceutical Intelligence";
 const SERVER_DESCRIPTION =
-  "Roots by Benda answers drug-interaction, adverse-event, and regulatory lookup questions by checking 23,259 Australian registered medicines, 4,947 DrugBank compounds, 5,000 drug-drug interactions, 2,000 FDA FAERS adverse-event records, WHO essential medicines, FDA NDI notifications, and ChEMBL bioactivity records. It is a free, source-linked drug safety MCP for interactions, FAERS signals, essential medicines, and regulatory lookup; ask your AI: 'check drug interactions for ibuprofen'.";
+  "Check drug safety across interactions, FAERS, DrugBank, WHO, TGA, and ChEMBL.";
 const DATA_CATALOG = {
   tga_artg_medicines: "23,259 Australian registered medicines",
   drugbank_drugs: "4,947 drug compounds with targets",
@@ -166,19 +166,19 @@ const DATA_CATALOG = {
 const TOOL_CATALOG = [
   {
     name: "check_drug",
-    description: "Look up a drug, medicine, active ingredient, or CAS number across DrugBank, WHO Essential Medicines, Australian TGA ARTG, and FDA NDI notifications. Returns identifiers, targets, schedules, dosage forms, indications, and regulatory records."
+    description: "Check a drug, medicine, active ingredient, or CAS number across pharmaceutical safety and regulatory datasets. Use when the user asks for DrugBank details, WHO Essential Medicines status, Australian TGA records, FDA NDI notifications, targets, dosage forms, indications, or regulatory lookup for a specific substance. Do not use for drug-drug interaction pair checks, FAERS adverse-event signal summaries, broad disease/topic discovery, or cosmetic/food/cannabis substances. The response includes identifiers, compound metadata, targets, schedules, dosage forms, indications, and regulatory records from matched datasets."
   },
   {
     name: "check_drug_interactions",
-    description: "Check drug-drug interactions for one drug or a specific pair. Returns interaction severity, mechanism, clinical effect, evidence level, and management recommendations for medication safety review."
+    description: "Check drug-drug interactions for one medication or a specific two-drug pair. Use when the user asks whether warfarin and aspirin interact, wants interaction severity, mechanism, clinical effect, evidence, or management guidance for medication safety review. Do not use for general drug monographs, adverse-event frequency, regulatory status, or non-drug ingredient interactions. The response includes matching interaction pairs, severity, mechanism, clinical effect, evidence level, and management recommendations."
   },
   {
     name: "check_adverse_events",
-    description: "Check FDA FAERS adverse-event records for a drug or active ingredient. Returns total reports, serious outcomes, death reports, top adverse reactions, and common patient age groups."
+    description: "Check FDA FAERS adverse-event records for a drug or active ingredient. Use when the user asks about reported side effects, serious outcomes, death reports, top reactions, age distribution, or post-market safety signals for a medication. Do not use for interaction mechanisms, regulatory approval lookup, nutrition/supplement advice, or adverse events not tied to a drug name. The response includes report totals, serious outcome counts, death counts, top adverse reactions, and common patient age groups."
   },
   {
     name: "search_pharma",
-    description: "Search across pharmaceutical regulatory and safety databases by keyword. Use for broad discovery across DrugBank, WHO Essential Medicines, TGA ARTG, FAERS, FDA NDI, drug interactions, and ChEMBL bioactivity."
+    description: "Search pharmaceutical regulatory and safety datasets by disease, drug class, endpoint, indication, or safety keyword. Use when the user needs broad discovery across DrugBank, WHO Essential Medicines, TGA ARTG, FAERS, FDA NDI, interactions, or ChEMBL before choosing a specific drug tool. Do not use for exact drug monographs, two-drug interaction checks, or FAERS summaries when the drug name is already known. The response includes cross-dataset matches with dataset labels, names, identifiers, snippets, and source-specific fields."
   }
 ];
 
@@ -216,7 +216,7 @@ export class PharmaMCP extends McpAgent<Env> {
           .min(1)
           .max(MAX_QUERY_INPUT_LENGTH)
           .describe(
-            "Drug name, active ingredient, or CAS number (e.g. 'aspirin', 'acetaminophen', '50-78-2')"
+            "Drug brand name, generic active ingredient, medicine name, synonym, or CAS number (Chemical Abstracts Service registry number, e.g. '50-78-2'). Use generic active ingredient names when possible for cross-database matching across DrugBank, WHO, TGA, FDA NDI, and ChEMBL."
           ),
       },
       async ({ query }) => {
@@ -354,7 +354,7 @@ export class PharmaMCP extends McpAgent<Env> {
           .min(1)
           .max(MAX_NAME_LENGTH)
           .describe(
-            "Primary drug name (e.g. 'warfarin', 'metformin', 'lisinopril')"
+            "Primary drug or active ingredient name for interaction lookup (e.g. 'warfarin', 'metformin', 'lisinopril'). Use generic names when possible because interaction datasets usually normalize to active substances."
           ),
         second_drug: z
           .string()
@@ -363,7 +363,7 @@ export class PharmaMCP extends McpAgent<Env> {
           .max(MAX_NAME_LENGTH)
           .optional()
           .describe(
-            "Optional second drug name to check for a specific interaction pair (e.g. 'aspirin')"
+            "Optional second drug or active ingredient name for a specific interaction pair (e.g. 'aspirin'). Omit when the user wants all known interactions for the primary drug."
           ),
       },
       async ({ drug, second_drug }) => {
@@ -471,7 +471,7 @@ export class PharmaMCP extends McpAgent<Env> {
           .min(1)
           .max(MAX_QUERY_INPUT_LENGTH)
           .describe(
-            "Drug name or active ingredient (e.g. 'ibuprofen', 'acetaminophen', 'metformin')"
+            "Drug brand name or generic active ingredient for FDA FAERS adverse-event lookup (e.g. 'ibuprofen', 'acetaminophen', 'metformin'). Use the active ingredient when possible to capture reports filed under different brands."
           ),
       },
       async ({ query }) => {
@@ -526,7 +526,7 @@ export class PharmaMCP extends McpAgent<Env> {
           .min(1)
           .max(MAX_QUERY_INPUT_LENGTH)
           .describe(
-            "Search term (e.g. 'diabetes', 'antibiotic', 'cancer', 'pregnancy', 'hepatotoxicity')"
+            "Pharmaceutical keyword, disease area, drug class, safety endpoint, indication, target, or regulatory term (e.g. 'diabetes', 'antibiotic', 'cancer', 'pregnancy', 'hepatotoxicity'). Use this for broad discovery across pharma datasets rather than exact monograph or interaction lookup."
           ),
       },
       async ({ query }) => {
