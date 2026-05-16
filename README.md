@@ -1,5 +1,7 @@
 # Roots by Benda — Pharmaceutical & Bioequivalence Intelligence MCP Server
 
+[![smithery badge](https://smithery.ai/badge/twohalves/pharma-regulatory)](https://smithery.ai/servers/twohalves/pharma-regulatory)
+
 **Drug safety, interactions, adverse events, and regulatory data in one MCP.** Check any drug or active ingredient against DrugBank, WHO Essential Medicines, FDA FAERS adverse events, drug-drug interactions, Australian TGA ARTG, FDA NDI notifications, and ChEMBL bioactivity — all source-linked and free.
 
 Equivalent data through commercial platforms (Lexicomp, Micromedex, DrugBank Pro) costs $20,000+/year. This MCP is free.
