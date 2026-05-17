@@ -1,8 +1,12 @@
 {
-  "$schema": "https://registry.modelcontextprotocol.io/schema/server.json",
-  "name": "com.rootsbybenda/pharma-regulatory",
-  "description": "Pharmaceutical regulatory intelligence across DrugBank, WHO Essential Medicines, Australian TGA, and FDA. Drug-drug interaction checking with severity and management. FDA adverse event reports (FAERS). Full-text search across 7 pharmaceutical databases. Free. Source-linked.",
-  "version": "1.0.0",
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.rootsbymenda/pharma-regulatory",
+  "description": "Drug safety: DrugBank, interactions, FAERS, WHO, TGA. 7 databases. Free.",
+  "repository": {
+    "url": "https://github.com/rootsbymenda/pharma-mcp-server",
+    "source": "github"
+  },
+  "version": "1.0.1",
   "remotes": [
     {
       "type": "streamable-http",
@@ -12,13 +16,5 @@
       "type": "sse",
       "url": "https://pharma-mcp-server.rootsbybenda.workers.dev/sse"
     }
-  ],
-  "tools": [
-    { "name": "check_drug", "description": "Multi-database drug lookup: DrugBank compound data, WHO Essential Medicines list, Australian TGA registered medicines, FDA new dietary ingredient notifications." },
-    { "name": "check_drug_interactions", "description": "Drug-drug interaction lookup by one or two drug names. Returns severity, mechanism, effect, and management guidance." },
-    { "name": "check_adverse_events", "description": "FDA FAERS adverse event summary for a drug. Total reports, serious outcomes, deaths, top adverse reactions, age group breakdown." },
-    { "name": "search_pharma", "description": "Full-text search across 7 pharmaceutical databases including DrugBank, WHO, TGA, FAERS, interactions, FDA NDI, and ChEMBL bioactivity." }
-  ],
-  "homepage": "https://rootsbybenda.com",
-  "contact": "SBD@effortlessai.ai"
+  ]
 }
