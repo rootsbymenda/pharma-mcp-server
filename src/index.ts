@@ -2,6 +2,12 @@ import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
+const READ_ONLY_TOOL_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  openWorldHint: false,
+} as const;
+
 // Escape LIKE special characters in user input to prevent wildcard injection
 function escapeLike(s: string): string {
   return s.replace(/[%_\\]/g, '\\$&');
@@ -219,6 +225,7 @@ export class PharmaMCP extends McpAgent<Env> {
             "Drug brand name, generic active ingredient, medicine name, synonym, or CAS number (Chemical Abstracts Service registry number, e.g. '50-78-2'). Use generic active ingredient names when possible for cross-database matching across DrugBank, WHO, TGA, FDA NDI, and ChEMBL."
           ),
       },
+      READ_ONLY_TOOL_ANNOTATIONS,
       async ({ query }) => {
         const q = normalizeQuery(query);
         const pattern = likePattern(q);
@@ -366,6 +373,7 @@ export class PharmaMCP extends McpAgent<Env> {
             "Optional second drug or active ingredient name for a specific interaction pair (e.g. 'aspirin'). Omit when the user wants all known interactions for the primary drug."
           ),
       },
+      READ_ONLY_TOOL_ANNOTATIONS,
       async ({ drug, second_drug }) => {
         const d = normalizeQuery(drug, MAX_NAME_LENGTH);
         const dPattern = likePattern(d);
@@ -474,6 +482,7 @@ export class PharmaMCP extends McpAgent<Env> {
             "Drug brand name or generic active ingredient for FDA FAERS adverse-event lookup (e.g. 'ibuprofen', 'acetaminophen', 'metformin'). Use the active ingredient when possible to capture reports filed under different brands."
           ),
       },
+      READ_ONLY_TOOL_ANNOTATIONS,
       async ({ query }) => {
         const q = normalizeQuery(query);
         const pattern = likePattern(q);
@@ -529,6 +538,7 @@ export class PharmaMCP extends McpAgent<Env> {
             "Pharmaceutical keyword, disease area, drug class, safety endpoint, indication, target, or regulatory term (e.g. 'diabetes', 'antibiotic', 'cancer', 'pregnancy', 'hepatotoxicity'). Use this for broad discovery across pharma datasets rather than exact monograph or interaction lookup."
           ),
       },
+      READ_ONLY_TOOL_ANNOTATIONS,
       async ({ query }) => {
         const q = normalizeQuery(query);
         const pattern = likePattern(q);
